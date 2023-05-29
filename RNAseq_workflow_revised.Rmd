@@ -1,0 +1,484 @@
+---
+title: "RNAseq workflow 2023"
+output:
+  html_document:
+    df_print: paged
+    toc: true
+    theme: united
+---
+#### Kinsey Fisher ####  
+##### Last edited May 25, 2023 #####  
+  
+  
+  
+This document includes our lab's typical RNAseq data analysis workflow and is an update of Amy's RNAseq_Workflow 2020 document. I will be using my *daf-2/daf-16* RNA sequencing data as an example, which used paired-end 50bp reads with ERCC Spike-ins for data normalization. Click [here](https://www.thermofisher.com/order/catalog/product/4456740#/4456740) for more information on Spike-ins. This experiment uses mRNA-seq to compare gene expression in fed and starved L1s in wild-type, and starved *daf-2(e1370)*, *daf-16(mgDf47)*, and *daf-16 (mgDf47); daf-2(e1370)* double mutant worms. The goal was to identify *daf-16*-independent effects of *daf-2* in starvation. To run this sample data on your own, make sure to pull all necessary files from the github [repository](https://github.com/KinseyFisher/RNAseq_workflow) into your working directory.
+
+# <span style="color: maroon;">Preparing the data for analysis:</span> #  
+  
+## Obtaining files ##  
+We will begin by obtaining the proper genome and annotation files. You can download these [here](ftp://ftp.wormbase.org/pub/wormbase/releases/). For this experiment I used genome version WS273, but you may want a newer version as they become available.
+  
+* The files we will be using:  
+  + c_elegans.PRJNA13758.WS273.genomic.fa (genome fasta file)  
+  + c_elegans.PRJNA13758.WS273.canonical_geneset.gtf (GTF file with annotations for genes of interest). 
+  
+Make sure to use the PRJNA13758 version that maps to C. elegans Wormbase ID. If you were mapping reads not to protein-coding genes but something else, you could search here for some other relevant annotation file. 
+
+If spike-ins were used in your sequencing samples, you will want to append the .fa and .gtf spike-in files to the end of the genome files, or download Amy's appended verision from github (c_elegans.PRJNA13758.WS273_ERCC92.canonical_geneset.gtf and c_elegans.PRJNA13758.WS273_ERCC92.genomic.fa).
+
+
+## Mapping reads in Bowtie ##
+
+*This step will need to be done in the terminal window of your computer* 
+
+### Indexing the genome ###  
+I am using MacOS 10.13.6 to run commands in terminal. Some of these commands may vary for windows.
+First, you need to get bowtie and samtools set up to use in your terminal window. Colin Maxwell’s document (celegans_rnaseq_ColinMaxwell.pdf) has helpful instructions on how to do this. I use a python environment with version 2.7 of python, and then download anything I need into that environment. When I activate the environment, then all the stuff I downloaded into that environment is available in my PATH. The PATH just consists of programs you have set up to be able to run on the command line. You can either edit your .bash_profile to add bowtie to your PATH, or you can create a python environment that when in use makes everything accessible (like I did). 
+
+You will begin by indexing the genome file using bowtie in order to map the reads to the genome. While in the same directory that contains your .fa file, run the following code:
+
+`cd /Users/kinseyfisher/daf2_daf16_RNAseq/`  
+This changes the working directory
+
+`source activate py27`  
+This activates the python environment. There should be a "(py27)" at the beginning of your command line now.
+
+`conda install bowtie`  
+This installs bowtie. Further instructions on this should be in Colin's document.
+
+`mkdir WS273`  
+Makes the directory for WS273
+
+`bowtie-build c_elegans.PRJNA13758.WS273_ERCC92.genomic.fa WS273/WS273`  
+Your new folder labeled WS273 should now contain the indexed genome.  
+
+### Mapping the reads ###  
+
+From the core, we typically receive a folder that contains all the fastq.gz files from a run. When we map the reads, we first generate a sam file, which is quite large. The binarized version of this file is called a bam file. Bam files are smaller (still ~1-2GB though), but these are used in the downstream counting steps, and we keep the bam files to upload to the GEO database when we publish the data.
+
+For paired-end reads, there is likely a way to loop through each set so you can run the code all at once, but for now I will just run one pair at a time. In terminal, run the following commands:
+`gunzip -k -c 1_S13_L002_R1_001.fastq.gz > tmp1.fastq`  
+`gunzip -k -c 1_S13_L002_R2_001.fastq.gz > tmp2.fastq`  
+
+This unzips the fastq files and stores them in temporary files that we will use to convert to a .sam file then finally our .bam file. 
+
+`bowtie -I 0 -X 500 --chunkmbs 256 -k 1 -m 2 -S -p 2 WS273/WS273 -1 tmp1.fastq -2 tmp2.fastq tmp.sam`  
+
+This part takes quite a while. On my computer it can take over an hour for one pair of samples (read 1 and 2), but may be faster depending on computer and size of the file. For paired-end reads you must decide on a range of acceptable distances for the two paired reads to be from each other. In this case I used the bowtie2 default, 0 to 500. 
+
+`samtools view -S -b tmp.sam > tmp.bam`  
+`samtools sort tmp.bam -o N2Fed_R2.positionsorted.bam`
+`samtools sort -n tmp.bam -o N2Fed_R2.namesorted.bam` 
+
+This step creates two new .bam files by sorting the temporary .bam file by name and position. These are the .bam files we will end up using so you will want to make sure the output is properly labeled. I labeled mine by condition and replicate for the sample that "1_S13_L002" was referring to.
+
+Once you have completed all of these steps, you can start on your next set of paired-end reads, until you have processed all of your samples.
+
+## Checking mapping efficiency ##  
+
+To check the mapping efficiency of your reads, which you will want to eventually include in your README sheet, you should run run_qa.py on your folder of position-sorted .bam files
+
+## Counting reads with HTseq ##
+
+Now that you have bam files, you can use these in HTseq along with the annotation file (.gtf) you acquired earlier to count the number of reads that map to each gene. You will first need to download HTSeq similar to how you downloaded bowtie and samtools and put it in your PATH.
+
+For paired reads, put all of your name sorted bam files in a new folder in your current working directory. Also in your current directory, move Colin’s counting script, count.py. I have been able to still use his script by activating python and running it with the BAM folder and .gtf file as input. More info about count.py can also be found in Colin's document.  
+
+Run the python script followed by the name of the folder that all your bam files are in, the name of the folder you want your count files to go into (you don’t have to already have this folder made, the command makes it), and the gtf file you downloaded earlier that will be used to count how many reads map to each gene. The settings you are using for HTSeq are in the python script. 
+
+`./count.py BAM_namesort counts_namesort c_elegans.PRJNA13758.WS273_ERCC92.canonical_geneset.gtf`  
+
+This command typically takes about 30-45 mins per sample on my computer, so it often takes all day to get through all of my samples. In the counts folder you created (counts_namesort in my example), you should have a counts file for each library, with the number of reads that align to each gene (Wormbase ID). This is what you will feed into R for differential expression analysis. 
+
+## Setting up counts data for R analysis ##
+You will now want to create a master counts .csv spreadsheet in excel from all of your individual counts files. You can copy and paste the text in the .txt files into excel for each sample and delete the repeated columns. The file "daf2_daf16_counts.csv" is an example of what it should look like. You can download this counts file and run through this R analysis for practice. 
+
+# <span style="color: maroon;">R analysis for differential expression:</span>  #  
+
+We will be conducting differential expression analysis using the package edgeR ([manual here](https://www.bioconductor.org/packages/release/bioc/vignettes/edgeR/inst/doc/edgeRUsersGuide.pdf)). 
+  
+* Some packages you will need to install and access:
+    + edgeR  
+    + ggplot2  
+    + reshape2  
+
+Bring in your master .csv file and a file with gene descriptions that you can download from the wormbase ftp site where you obtained the genome files ("c_elegans.PRJNA13758.WS273.geneIDs.txt" on wormbase, reformatted to "WS273_geneNames" in github):
+```{r}
+library(reshape2)
+library(ggplot2)
+daf2_daf16_counts<-read.csv("daf2_daf16_counts.csv",header = T)
+head(daf2_daf16_counts)
+WS273_geneNames <- read.csv("WS273_geneNames.csv",header = T) #this has the extra information beyond the wormbase IDs (WB_id)
+```
+
+  
+### Mapping by biotype: ###  
+Next, we will check what types of features the reads are mapping to. For mRNAseq, the majority should be mapping to protein-coding genes, so this is a good quality assurance check. I also only mapped to the “canonical geneset” so the only features that could potentially be mapped to are the ones listed in this legend. This also shows how the number of reads differs across libraries. 
+```{r}
+daf2_daf16_counts_merge <- merge (daf2_daf16_counts, WS273_geneNames, by.x = "gene_id", by.y = "WB_id") 
+head(daf2_daf16_counts_merge)
+```
+Merge counts file with geneNames file to add geneNames info to your master file, and check to make sure it looks right.
+```{r}
+daf2_daf16_counts_byBiotype <- daf2_daf16_counts_merge[,-1]
+head(daf2_daf16_counts_byBiotype)
+daf2_daf16_counts_byBiotype<- daf2_daf16_counts_byBiotype[,-21:-23]
+daf2_daf16_counts_byBiotype_melt <- melt(daf2_daf16_counts_byBiotype)
+
+daf2_daf16_byBiotype<- aggregate (daf2_daf16_counts_byBiotype_melt$value,list(variable=daf2_daf16_counts_byBiotype_melt$variable,type=daf2_daf16_counts_byBiotype_melt$type),sum)
+
+Mapping_by_Biotype<-(ggplot(daf2_daf16_byBiotype,aes(x=variable,y=x,fill=type))+
+                       geom_bar(stat="identity")+labs(y="Total counts",x="Condition and replicate")+
+                       theme_classic(base_size = 15)+ggtitle("Number of reads per biotype")+
+                       theme(axis.text.x = element_text(angle = 90, size = 7)) +
+                       theme(legend.key.size = unit(.2, "cm")) +
+                       theme(aspect.ratio = 1)) 
+                      
+
+Mapping_by_Biotype
+
+```
+
+
+### Subsetting and prepping the data for DE analysis ###
+  
+Next, I restricted the analysis to only include protein-coding genes. I also prepared for doing differential expression analysis by defining which groups I’m interested in comparing and assigning each library to a group (the `counts_groups` object).
+
+```{r}
+daf2_daf16_proteinCoding<-subset(daf2_daf16_counts_merge,type=="protein_coding_gene") 
+head(daf2_daf16_proteinCoding)
+daf2_daf16_counts2<-daf2_daf16_proteinCoding[,1:21]
+rownames(daf2_daf16_counts2)<-daf2_daf16_counts2$gene_id #make the rownames the gene_id column
+daf2_daf16_counts2 <- daf2_daf16_counts2[,-1]
+head(daf2_daf16_counts2)
+
+counts_groups <- c("N2fed", "N2fed", "N2fed", "N2fed","N2starved", "N2starved", "N2starved", "N2starved", "daf-2", "daf-2", "daf-2", "daf-2", "daf-16;daf-2", "daf-16;daf-2", "daf-16;daf-2", "daf-16;daf-2", "daf-16", "daf-16", "daf-16", "daf-16") 
+#Duplicate each group ID for the number of replicates you have, in my case it is 4
+```
+
+The “DGEList” is key object that you make in edgeR for analysis. You’re telling it which counts you’re using and what the groupings are. We’ve already filtered to only include protein-coding genes but now we are filtering further to only include genes that are expressed at some threshold. We’ve typically done CPM>1 in at least the number of replicates we did. So in this case there were 4 replicates, so the cutoff was CPM>1 in at least 4 replicates. Reducing the number of genes included in the analysis reduces the hit taken by the multiple hypothesis correction. It is normal to cut ~40% of the lowest expressed genes. I also used edgeR to calculate the normalized CPM. The normalized CPM is what you would plot if you were interested in looking at a graph of what a particular gene or group of genes is doing (NOT the un-normalized counts).
+
+```{r}
+library(edgeR)
+
+d2<-DGEList(counts=daf2_daf16_counts2,group=factor(counts_groups))
+dim(d2) #check the dimensions of the d2 without any filtering
+keep_filter<-rowSums(cpm(d2)>1)>=4 #decide how you want to filter the data
+d2<-d2[keep_filter,] #filter d2 to only include genes that passed filtering
+dim(d2) #check the new dimensions
+cpm_d2<-cpm(d2,normalized.lib.sizes = TRUE) #make a counts per million object containing normalized CPM
+cpm_d2<-as.data.frame(cpm_d2)
+cpm_d2_melt<-melt(cpm_d2)
+```
+
+### Density Plot ###
+
+This allows you to view the "shape" of the transcriptome
+```{r}
+DensityPlot<-(ggplot(cpm_d2_melt,aes(x=log10(value),color=variable))+
+  geom_density()+labs(x="log10(CPM)")+ggtitle("Distribution of CPM values")+
+  theme_classic(base_size = 15)+theme(aspect.ratio = 1)) +
+  theme(legend.key.size = unit(.2, "cm"))
+DensityPlot
+
+```
+
+### PCA analysis ###
+
+Next we will be doing a PCA analysis, which involves doing linear algebra to break down the data into its linearly independent components that explain the variation in the data. Ideally, the data separates into the factors you expected, meaning you are able to explain the variation in the data.  `summary(pca)` will give you the percentage variance explained by each principal component. We do a log2 mean normalization of the CPM values prior to running PCA. For this experiment, I would expect that feeding and genotype would be the two main factors driving variation.
+
+```{r}
+conditions<-counts_groups
+cpm_d2_df<-data.frame(cpm_d2)
+cpm_d2_df$mean<-rowMeans(cpm_d2_df)
+cpm_d2_df2<-cpm_d2_df[,1:20]/cpm_d2_df$mean #mean normalize
+cpm_d2_df2<-log2(cpm_d2_df2+1) #log2 transform 
+pca = prcomp(t(cpm_d2_df2)) #principal component analysis (PCA) on the log2 mean normalized CPM values
+summary(pca)
+pca_genes<-pca$x
+pca_genes_dataframe<-as.data.frame(pca_genes)
+pca_genes_dataframe<-data.frame(conditions,pca_genes_dataframe)
+
+replicates<-c("rep2","rep3","rep5","rep6","rep2","rep3","rep5","rep6","rep2","rep3","rep5", "rep6","rep2","rep3","rep5", "rep6","rep2","rep3","rep5", "rep6")
+
+```
+```{r}
+PCA1<-(ggplot(pca_genes_dataframe,aes(x=PC1,y=PC2,colour=conditions))+
+         geom_point(size=5)+
+         ggtitle("PCA of daf-2/daf-16, 95% CI")+
+         labs(x="PC1 (66.5% of variance)",y="PC2 (15.56% of variance)")+
+         stat_ellipse(level = 0.95)+theme_classic(base_size = 15)+
+         theme(aspect.ratio = 1))
+PCA1
+```
+
+This PCA plot looks nice. Conditions are clumped together without much spread. PC1 clearly explains fed vs. starved variance, and PC2 clearly explains genotype, so most of our variance is explained by our controlled variables. It is interesting to this experiment that *daf-2* and the *daf-16;daf-2* double mutant do not separate on the PCA. We were looking for *daf-16*-independent effects of *daf-2*, so this is the first indication that the two strains behave very similarly. You can also look deeper into the PCs (PC3 or PC4).
+
+If you think something may be explaining your variance that you have data for (for example, stage of development), you can plot the actual numbers from the `pca_genes_dataframe` against that variable for each sample in a linear regression and see if there is a convincing correlation. 
+
+```{r}
+PCA2<-(ggplot(pca_genes_dataframe,aes(x=PC1,y=PC2,colour=conditions,shape=replicates))+
+         geom_point(size=5)+
+         ggtitle("PCA of daf-2/daf-16, replicates")+
+         labs(x="PC1 (66.5% of variance)",y="PC2 (15.56% of variance)")+
+         theme_classic(base_size = 15)+
+         theme(legend.key.size = unit(.2, "cm")) +
+         theme(aspect.ratio = 1)) 
+PCA2
+```
+
+This next PCA plot indicates replicate. If there were a replicate that stood out here as different from the others in each group, you may want to consider filtering out that replicate. Here, none of the replicates stand out. Rep6 of N2 starved is slightly different from the others, but this is only true for that strain so I am going to continue my analysis with all of my replicates.
+
+### Correlation Matrix ###
+
+Next, we will want to create a correlation matrix (pairwise Pearson correlation coefficients between each library) to see how correlated your samples are to each other. This gives us a little more information on how similar your strains/conditions may be to each other and also quantitatively tells us if certain replicates stand out by not correlating with other replicates from that group. You want replicates from the same group to be high, preferably around .97-.99, but this may vary depending on data quality or your specific conditions. This correlation matrix is made from the `cpm_d2` object, which is normalized by CPMs, log2 transformed and filtered.
+
+```{r}
+count_cormatrix<-round(cor(log2(cpm_d2+1),use="all.obs",method="pearson"),digits=2)
+
+reorder_cormat <- function(count_cormatrix){
+  # Use correlation between variables as distance
+  dd <- as.dist((1-count_cormatrix)/2)
+  hc <- hclust(dd)
+  cormat <-count_cormatrix[hc$order, hc$order]
+}
+
+#use the count_cormatrix that is not reordered. 
+count_cormatrix1<-reorder_cormat(count_cormatrix)
+melted_cormatrix1<-melt(count_cormatrix1)
+melted_cormatrix<-melt(count_cormatrix)
+correlation_matrix<-(ggplot(data=melted_cormatrix,aes(x=Var1,y=Var2,fill=value))+
+                       geom_tile(colour="white")+
+                       scale_fill_gradient2(low="#900C3F",high="#6B33FF",mid="white",midpoint=0.95,limit=c(0.9,1))+
+                       theme_classic(base_size = 10)+
+                       theme(axis.text.x = element_text(angle = 90, vjust = 1, hjust = 1))+
+                       geom_text(aes(Var2, Var1, label = value), color = "black", size = 1.5)+
+                       ggtitle("Corr. matrix of daf-2 and daf-16")+theme(aspect.ratio = 1))
+correlation_matrix
+
+```
+
+Here we see a lot of what we already gathered from the PCA plot, but it is quantified. The *daf-16* and *daf-16;daf-2* strains are highly correlated with each other. Each replicate correlates nicely with other replicates from each group with the exception of N2 Fed Rep6, which is slightly lower. You can also see milder correlations based on fed vs. starved and genotype (*daf-2* is highly dissimilar to both *daf-16* mutants, but relatively similar to N2 starved).  
+
+### Differential expression analysis ###
+
+This is where we will run the exactTest to get the differentially expressed genes for each comparison. It is generally good to run a comparison for each possible pair of conditions, even if it is not necessarily a comparison you are interested in, in order to be thoroguh and catch anything that may otherwise be overlooked. We will create a plot for each comparison that highlights differentially expressed genes, and what the expression levels of those genes are. We will then create a .txt file for each comparison that caluclates log2 fold change of each gene for each comparison, filter by differentially expressed genes, and use for further analysis (CDF plots, linear regression, hierarchical clustering, etc.). 
+
+```{r}
+d2<-calcNormFactors(d2) #calculate normalization factors
+d2<-estimateCommonDisp(d2) #calculate dispersion 
+d2<-estimateTagwiseDisp(d2)
+
+```
+
+**daf-16;daf-2/daf-16 comparison:**  
+```{r}
+de.tag<-exactTest(d2,d2$tagwise.dispersion,pair=c("daf-16","daf-16;daf-2")) #make sure to have these in the right order. The control, or denominator, should come first.
+de.tag_sort<-topTags(de.tag,n=nrow(de.tag$table))$table
+de.tag_top<-rownames(de.tag_sort)[de.tag_sort$FDR<=0.05] #You could also try a less stringent FDR value, like 0.1
+de.tag_merge<-merge(WS273_geneNames,de.tag_sort,by.x="WB_id",by.y = 0)
+plotSmear(de.tag,de.tags = de.tag_top,main="daf-16;daf-2/daf-16")
+write.table(de.tag_merge,"daf-16;daf-2vsdaf-16.txt",quote=F,sep="\t") #this writes our .txt file
+```
+
+It is not surprising that there are only a few differentially expressed genes here considering how much these conditions overlapped in the PCA and correlation matrix. However, these genes are the ones we will want to further explore if we really want to dig deep to see if there are *daf-16*-independent effects of *daf-2*. We can find out what these genes are in the .txt file we created for this comparison.  
+
+**N2 starved/N2 fed comparison:**   
+```{r}
+de.tag<-exactTest(d2,d2$tagwise.dispersion,pair=c("N2fed","N2starved"))
+de.tag_sort<-topTags(de.tag,n=nrow(de.tag$table))$table
+de.tag_top<-rownames(de.tag_sort)[de.tag_sort$FDR<=0.05]
+de.tag_merge<-merge(WS273_geneNames,de.tag_sort,by.x="WB_id",by.y = 0)
+plotSmear(de.tag,de.tags = de.tag_top,main="N2starved/N2fed")
+write.table(de.tag_merge,"N2starvedvsN2fed.txt",quote=F,sep="\t")
+```
+
+Lots of differentially expressed genes with high log fold changes. Not surprising, considering one condition this comparison accounts for all gene expression changes associated with starvation and larval arrest. It is interesting to see that there are manny genes with really strong downregulation (log2FC > -10), which might be indicative of strong genome silencing to promote larval arrest.
+
+Again, you would want to look at this for all of the comparisons, but for the simplicity of this document, I am only providing these two examples.
+
+# <span style="color: maroon;">Additional R analysis:</span>  # 
+
+Now that we have our lists of differentially expressed genes, log2 fold changes, and normalized CPMs, we can start digging deeper to figure out what genes, pathways, tissues, etc. are driving the results you see. 
+
+## GO-term analysis ## 
+
+It is best to begin by doing some simple GO-term analyses with your differentially expressed genes. We usually use an FDR cutoff of 0.05 to define "differentially expressed", but this is up to your discression depending on how strict you want to be on your data and how sensitive you want to be to smaller changes in gene expression. Once you have your filtered list of genes of interest, you can enter them into a GO-term enrichment analysis tool. [here](http://geneontology.org/docs/go-enrichment-analysis/) is some helpful information on GO-term analysis. In the past, we have typically used GOrilla, however this tool is no longer available. Other options such as [wormbase](https://wormbase.org//tools/enrichment/tea/tea.cgi) exist as well. Make sure to also include a background set of genes. For this, I typically use the list of all genes detected in my experiment as the background gene list, but this can change depending on what you're looking at. 
+
+With this analysis you should be able to get an idea of the function of your differentially expressed genes. Visual outputs are also nice to use on presentations, which you can create yourself using the enrichment values or some tools create nice figures for you.  
+
+[WormExp](https://wormexp.zoologie.uni-kiel.de/wormexp/) is also a useful tool to see if your gene list is enriched in other datasets from previous studies (mutants, etc.). For most of these data sets, you should be able to find the paper WormCat extracted this data from and pull out the raw data from supplementary materials and do further comparisons between these datasets. 
+
+## CPM plots across conditions ##
+
+You may also want to look at the expression of individual genes across your conditions. For example, in my 34 differentially expressed genes between *daf-16* and *daf-16;daf-2*, I wanted to plot the expression of each gene across conditions to see if they followed the pattern of a *daf-16*-independent *daf-2*-regulated gene. In this case, I would be looking for genes whose expression is unaffected between the *daf-16* mutant and N2 starved, but up or downregulated (to the same extent) in the *daf-2* and *daf-16;daf-2* mutants. 
+
+This code will take in a .csv file that contains the CPM values of each gene of interest across conditions. You can filter your CPM table to only contain your genes of interest to get this file. It should look like the file named "Daf16_double_DEgenes_expression.csv" under the Additional Analysis folder. It will loop through each gene and output a pdf with a bar graph containing CPM values and error bars for each gene in your dataset across conditions. This code is lengthy and I hope to simplify it soon.
+```{r}
+library(data.table)
+df = fread("Daf16_double_DEgenes_expression.csv", na.strings = "NA")
+N2Fed = c(df$N2Fed_R2, df$N2Fed_R3, df$N2Fed_R5, df$N2Fed_R6)
+N2Starved = c(df$N2Starved_R2, df$N2Starved_R3, df$N2Starved_R5, df$N2Starved_R6)
+Daf2 = c(df$Daf2_R2, df$Daf2_R3, df$Daf2_R5, df$Daf2_R6)
+Daf2_Daf16 = c(df$Daf2_Daf16_R2, df$Daf2_Daf16_R3, df$Daf2_Daf16_R5, df$Daf2_Daf16_R6)
+Daf16 = c(df$Daf16_R2, df$Daf16_R3, df$Daf16_R5, df$Daf16_R6)
+
+Symbol = rep(df$Symbol, 4)
+new_df = as.data.table(cbind(Symbol, N2Fed, N2Starved, Daf2, Daf2_Daf16, Daf16))
+new_df = new_df[, N2Fed := as.numeric(N2Fed)]
+new_df = new_df[, N2Starved := as.numeric(N2Starved)]
+new_df = new_df[, Daf2 := as.numeric(Daf2)]
+new_df = new_df[, Daf2_Daf16 := as.numeric(Daf2_Daf16)]
+new_df = new_df[, Daf16 := as.numeric(Daf16)]
+
+mean_new_df = new_df[, lapply(.SD, mean), by = Symbol]
+sd_new_df = new_df[, lapply(.SD, sd), by = Symbol]
+names_mean_new_df = names(mean_new_df)
+names_mean_new_df = names_mean_new_df[-1]
+
+mean_new_df_resh = reshape(mean_new_df,
+        direction = "long",
+        varying = list(names(mean_new_df)[2:6]),
+        v.names = "Mean",
+        idvar = c("Symbol"),
+        timevar = "Condition",
+        times = names_mean_new_df)
+
+sd_new_df_resh = reshape(sd_new_df,
+        direction = "long",
+        varying = list(names(mean_new_df)[2:6]),
+        v.names = "Sd",
+        idvar = c("Symbol"),
+        timevar = "Condition",
+        times = names_mean_new_df)
+
+mean_new_df_resh = mean_new_df_resh[, Condition := factor(Condition,
+  levels=c("N2Fed", "N2Starved", "Daf2", "Daf2_Daf16", "Daf16"))]
+sd_new_df_resh = sd_new_df_resh[, Condition := factor(Condition,
+  levels=c("N2Fed", "N2Starved", "Daf2", "Daf2_Daf16", "Daf16"))]
+new_df_resh = merge(mean_new_df_resh, sd_new_df_resh, by=.EACHI)
+
+pdf("daf-16 vs daf-16;daf-2 CPM.pdf")
+genes = unique(new_df$Symbol)
+for(i in 1:length(unique(new_df$Symbol))) {
+  gene_tmp = genes[i]
+  tmp = new_df_resh[Symbol == gene_tmp,]
+  title_gene = paste("Expression of ", gene_tmp, sep = "")
+
+  p<- ggplot(tmp, aes(x=Condition, y=Mean)) +
+    geom_bar(stat="identity", color="black", fill = "#FF5733", position=position_dodge()) +
+    geom_errorbar(aes(ymin=Mean-Sd, ymax=Mean+Sd), width=.2,
+                   position=position_dodge(.9))
+  p <- p +labs(title=title_gene)
+  print(p)
+}
+dev.off()
+
+```
+## Venn diagrams ##
+
+There are many ways to compare your dataset to another. For example, I may want to see how the genes that are downregulated in my dataset compare to Tepper's ^[1] Class I and Class II genes. The first thing I can do is create a venn diagram illustrating the overlap between genes that are down in my *daf-16* mutant versus Tepper's Class I genes (genes upregulated by *daf-16*, stress response genes). `venn()` takes in two lists of genes. `phypher` will give us the [hypergeometric p-value](https://seqqc.wordpress.com/2019/07/25/how-to-use-phyper-in-r/)
+
+You could also filter your data from the *daf-16*/N2starved exact test through R to only have differentially expressed (FDR<0.05), downregulated genes (logFC<0). The Tepper list was obtained this list from Tepper supplementary data and can be found under the Additional Analysis folder.
+
+For certain comparisons, you can make a proportional venn diagram, where the size of the oval/overlap is proportional to how many genes are in that section. [Here](https://statisticsglobe.com/venn-diagram-with-proportional-size-in-r) are some other options if you wish to do this.
+
+```{r}
+library(gplots)
+daf16_down <- read.csv("daf16_down.csv", header = T)  
+ClassI <- read.csv("Tepper_down.csv", header = T) 
+daf16_down_vs_Tepper_Class1<-list(Down=daf16_down, ClassI = ClassI)
+venn1<-venn(daf16_down_vs_Tepper_Class1)
+
+phyper(429,1093,13230,1624,lower.tail = FALSE,log.p = FALSE)
+
+#first number is the number of genes in both sets minus 1
+#next number is the total number of DE genes in one list
+#subtract that number (above) from the total number of genes in the background for the third number
+#the last number is the number of DE genes in the other list
+#lower tail is false means the p-value is the prob of getting that many genes genes or greater overlap
+
+
+
+```
+
+## CDF Plots ##
+
+Cumulative distribuion function (CDF) plots are useful when you want to see what a group of genes is doing compared to the rest of the genes in your dataset. You will want to input a dataframe that consists of the logFC of all of the genes in your experiment (aka the contents of the .txt outputs from the exact test). You will also provide a genelist (just the WB_ID) of the group of genes you are interested in. For example, if I want to see what Tepper's Class I genes are doing when *daf-16* is mutated in my experiment, I will input my *daf-16*/N2starved spreadsheed ("daf16_N2starved_logFC.csv") in addition to the Tepper Class I genelist. We use the Kolmogorov Smirnov test to see if there is a significant difference between the control curve (cumulative distribution of all genes in data) vs the curve of the genes of interest. However, this test is highly sensitive and only tells us if the two curves are different, so if your two curves intersect you may get a significant p-value but not know if they are significantly up or downregulated. 
+
+```{r}
+Background<-read.csv("daf16_N2starved_logFC.csv",header = T)
+rownames(Background)<-Background$WB_id
+GeneLists<-read.csv("Tepper_down.csv", header = T)
+
+GeneLists_df<-as.data.frame(GeneLists)
+
+#remove NAs and empty values from the dataframe
+GeneLists_df <- GeneLists_df[!apply(is.na(GeneLists_df) | GeneLists_df == "", 1, all),]
+GeneLists_df<-as.data.frame(GeneLists_df)
+rownames(GeneLists_df)<-GeneLists_df$GeneLists_df
+
+venn1<-venn(list(Background$WB_id,GeneLists_df$GeneLists_df),show.plot = FALSE) 
+venn1_overlap<-attr(venn1,"intersections")$`A:B` #this narrows your gene list to only include genes that are in the background
+
+CDF_plot<-(ggplot()+
+             coord_fixed(xlim=c(-3,3),ratio = 5)+
+             stat_ecdf(data = Background,aes(logFC))+ #all genes
+             stat_ecdf(data= Background[venn1_overlap,],aes(logFC,color="Class I genes only"))+ #genes in the list
+             ggtitle("CDF of Tepper Class I genes in daf-16/N2 starved genes")+
+             labs(y="cumulative proportion",x="log2FC (daf-16/N2 starved)")+
+             theme_classic(base_size = 15))
+CDF_plot 
+
+ks_test<-ks.test(Background$logFC,Background[venn1_overlap,]$logFC,alternative="two.sided") #Kolmogorov Smirnov test
+ks_test
+```
+
+In this comparison, Class I genes typically have lower log2 fold changes in this dataset than the background (all genes), indicating that the Tepper class I genes are down in my dataset when *daf-16* is mutated. 
+
+## Linear regressions ##
+You may also want to see how the logFC of genes in one dataset compare to those in another dataset to see if there is a correlation between the direction all genes are moving in each dataset. Here, I am going to compare the log2FC of my *daf-16*/N2starved condition to that of our lab's previous [paper](https://journals.plos.org/plosgenetics/article?id=10.1371/journal.pgen.1005731) from 2015 that compares *daf-16*/N2starved (Additional Analysis/Kaplan_logFC.csv). This is a simple linear regression, but I will also include code for creating a heated 2d regression that shows a clearer view of what's going on inside a large cloud of genes. 
+
+```{r}
+logFC_Kaplan <- read.csv("Kaplan_logFC.csv", header = T) #removed -inf and inf values
+daf16_logFC<-read.csv("daf16_N2starved_logFC.csv",header = T)
+merged1 <- merge(daf16_logFC, logFC_Kaplan, by.x = "WB_id", by.y = "WB_id")
+
+linear_regression <- ggplot(merged1, aes(x=logFC.x, y=logFC.y )) +
+  geom_point(size = .1, aes(logFC.x, logFC.y)) +
+  labs(x = "daf-16/N2starved", y = " Kaplan daf-16/N2") +
+  theme_classic(base_size = 15) +
+  ggtitle("lin. reg. daf-16/N2 starved and Kaplan daf-16/N2") +
+  geom_smooth(method=lm,   # Add linear regression line
+              se=FALSE) 
+linear_regression
+
+#If you want the the heated 2d histogram:
+ggplot(merged1, aes(x=logFC.x, y=logFC.y) ) +
+  geom_bin2d(bins = 100) +
+  scale_fill_continuous(type = "viridis") +
+  geom_smooth(method=lm,   # Add linear regression line
+              se=FALSE) +
+  theme_bw()
+
+#Statistics 
+daf16_logFC_merged <- merged1$logFC.x
+kaplan_logFC_merged <- merged1$logFC.y
+cor(daf16_logFC_merged, kaplan_logFC_merged) #correlation coefficient
+fit = lm (daf16_logFC_merged ~ kaplan_logFC_merged) #p-value
+summary(fit)
+library(report)
+report(fit)
+```
+
+In this case, the heated model wasn't very helpful, but in the case that there are many small logFC changes in both datasets, this model can be very useful to visualize that. We do see a significantly positive correlation between these two datasets.
+
+# <span style="color: maroon;">Writing results and storing data:</span>  # 
+
+After running the analysis and generating plots, you’ll want to organize it so it’s easy to share with others, especially if it’s primarily for someone else’s project. I generally put the differential expression output and normalized CPMs on different sheets within a single excel document, and have an additional sheet as the “README” page. The README has information on the mapping efficiency (how many of the reads in the fastq files mapped to the genome in the bam files), methods (including settings for bowtie, htseq, and edgeR, how you filtered the counts in edgeR, how many genes were included in differential expression analysis, etc.), and some brief statements interpreting the results. If you filtered any replicates out, the reasons for doing so should be stated here. My final analysis summary that includes a readme file, CPMs, and each comparison of interest can be found in the repository labeled "daf2_daf16_analysis_20201013". All of the plots generated in R I put into a single pdf, and I send the pdf and the excel spreadsheet summarizing the results. These files, in addition to original fastq files, generated bam and count files, and any other important files (perhaps genome or annotation file if it’s a version that wasn’t used before) should be stored on Dropbox in an experiment-specific folder within ‘Big_Data’. The folder for your experiment should be labeled with the date and brief description of the experiment "yearmonthday_description". Make sure that all of your files are labeled clearly and if there are revised versions to add the date to the name of the file. In addition to backing up on dropbox, you should put all of the files that are on dropbox on a separate external hard drive. 
+
+
+## References: ##
+
+^[1] Tepper RG, Ashraf J, Kaletsky R, Kleemann G, Murphy CT, et al. (2013) PQM-1 complements DAF-16 as a key transcriptional regulator of DAF-2-mediated development and longevity. Cell 154: 676–690. pmid:23911329
+https://www.cell.com/cell/fulltext/S0092-8674(13)00840-4?_returnURL=https%3A%2F%2Flinkinghub.elsevier.com%2Fretrieve%2Fpii%2FS0092867413008404%3Fshowall%3Dtrue
